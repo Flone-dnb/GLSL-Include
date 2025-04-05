@@ -37,11 +37,17 @@ SOFTWARE.
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <variant>
 
 //####################
 //### Declarations ###
 //####################
 namespace glsl_include {
+
+    struct Error {
+    public:
+        std::string message;
+    };
 
     class ShaderLoader {
     public:
@@ -65,7 +71,7 @@ namespace glsl_include {
         * 
         *   @return A string containing the contents of the shader file, with any custom #include statements replaced by their contents.
         */
-        std::string load_shader(const std::string& file_path)
+        std::variant<std::string, Error> load_shader(const std::string& file_path)
         {
             // If size is 0, it indicates, that we are at the top of the recursive load stack
             bool stack_top = (already_included.size() == 0);
@@ -77,8 +83,7 @@ namespace glsl_include {
             std::ifstream file(file_path);
             if (!file.good())
             {
-                std::cout << "ERROR [ ShaderLoader::load_shader ]: Failed to start fstream, check if '" << file_path << "' exists\n";
-                return ret_data;
+                return Error{std::string("file \"") + file_path + "\" does not exist"};
             }
             if (file.is_open())
             {
@@ -89,7 +94,12 @@ namespace glsl_include {
                     if (line.find(include_keyword) == 0)
                     {
                         // Get path between double quotes
-                        std::string rel_include_path = extract_first_between(line.substr(include_keyword.length()), '"', '"');
+                        auto result = extract_first_between(line.substr(include_keyword.length()), '"', '"');
+                        if (std::holds_alternative<Error>(result))
+                        {
+                            return std::get<Error>(result);
+                        }
+                        std::string rel_include_path = std::get<std::string>(std::move(result));
                         // Modify path according to os
                         #ifdef _WIN32
                             std::replace(rel_include_path.begin(), rel_include_path.end(), '/', '\\');
@@ -99,9 +109,8 @@ namespace glsl_include {
                         std::string full_include_path = extract_path(file_path) + rel_include_path;
 
                         // Avoid including self
-                        if (file_path == full_include_path) {            
-                            std::cout << "WARNING [ ShaderLoader::load_shader ]: '"<< file_path <<"' tried to include itself\n";
-                            continue;
+                        if (file_path == full_include_path) {      
+                            return Error{file_path + " tried to include itself"};
                         }
                         else {
                             bool include_flag = true;
@@ -119,7 +128,12 @@ namespace glsl_include {
                             {
                                 already_included.push_back(full_include_path);
                                 // Repeat recurively
-                                ret_data += load_shader(full_include_path) + "\n";
+                                auto result = load_shader(full_include_path);
+                                if (std::holds_alternative<Error>(result))
+                                {
+                                    return std::get<Error>(result);
+                                }
+                                ret_data += std::get<std::string>(std::move(result)) + "\n";
                             }
                         }
                     }
@@ -131,7 +145,7 @@ namespace glsl_include {
             }
             else
             {
-                std::cout << "ERROR [ ShaderLoader::load_shader ]: Unable to open file '" << file_path << "'\n";
+                return Error{std::string("unable to open file ") + file_path};
             }
             // We are back to the first call
             if (stack_top) {
@@ -178,7 +192,7 @@ namespace glsl_include {
          * 
          *  @return The extracted string (excluding the symbols themselves), or an empty string if no match is found.
          */
-        std::string extract_first_between(const std::string& input, char start_symbol, char end_symbol)
+        std::variant<std::string, Error> extract_first_between(const std::string& input, char start_symbol, char end_symbol)
         {
             size_t start_index = input.find(start_symbol);
             size_t end_index = input.find(end_symbol, start_index + 1);
@@ -189,7 +203,7 @@ namespace glsl_include {
             }
             else
             {
-                std::cout << "ERROR [ ShaderLoader::extract_first_between ]: Start '" << start_symbol << "' or end symbol '" << end_symbol << "' not found" << std::endl;
+                return Error{std::string("start \"") + start_symbol + "\" or end symbol \"" + end_symbol + "\" not found"};
             }
             return extracted_string;
         }
